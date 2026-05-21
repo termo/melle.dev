@@ -1,0 +1,245 @@
+
+<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>melle.dev</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+      background-color: #2d1f3d;
+      background-image: url('background.png');
+      background-size: cover;
+      background-position: center;
+    }
+    canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #sparkle-canvas { z-index: 1; }
+    #tilt-canvas    { z-index: 2; }
+  </style>
+</head>
+<body>
+<canvas id="sparkle-canvas" data-engine="three.js r160" width="3456" height="1808" style="width: 1728px; height: 904px;"></canvas>
+<canvas id="tilt-canvas" data-engine="three.js r160" width="3456" height="1808" style="width: 1728px; height: 904px;"></canvas>
+
+<script type="importmap">
+  {
+    "imports": {
+      "three":         "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/tg":      "https://unpkg.com/three@0.160.0/examples/jsm/geometries/TextGeometry.js",
+      "three/loader":  "https://unpkg.com/three@0.160.0/examples/jsm/loaders/FontLoader.js"
+    }
+  }
+</script>
+
+<script type="module">
+import * as THREE          from 'three';
+import { TextGeometry }    from 'three/tg';
+import { FontLoader, Font } from 'three/loader';
+
+console.log('[1] modules imported OK');
+
+const rand = (a, b) => Math.random() * (b - a) + a;
+
+/* ════════════════════════════════════
+   SPARKLE CANVAS
+═══════════════════════════════════ */
+const sparkleCanvas = document.getElementById('sparkle-canvas');
+const spRenderer = new THREE.WebGLRenderer({
+  canvas: sparkleCanvas, alpha: true, antialias: false,
+});
+console.log('[2] sparkle renderer created',
+  'webgl:', !!spRenderer.getContext());
+spRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+spRenderer.setSize(window.innerWidth, window.innerHeight);
+spRenderer.setClearColor(0x000000, 0);
+
+const spScene = new THREE.Scene();
+const spCam   = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 2);
+spCam.position.set(0, 0, 0);
+
+function glowTex() {
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(S/2, S/2, 0, S/2, S/2, S/2);
+  g.addColorStop(0,    'rgba(255,255,255,.97)');
+  g.addColorStop(0.1,  'rgba(255,255,255,.80)');
+  g.addColorStop(0.5,  'rgba(255,255,255,.12)');
+  g.addColorStop(1,    'rgba(255,255,255, 0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, S, S);
+  return new THREE.CanvasTexture(c);
+}
+
+const PALETTE = [
+  '#f0eaf6','#e8e8f0','#d6b8e0','#b89cc0',
+  '#aec8e8','#ee8cc0','#98b2dd','#ffffff',
+];
+
+const COUNT  = 140;
+const sPos   = new Float32Array(COUNT * 3);
+const sCol   = new Float32Array(COUNT * 3);
+const sTwnk  = new Float32Array(COUNT * 2);
+
+  for (let i = 0; i < COUNT; i++) {
+  sPos[i*3]   = rand(-1,1);    // X ± full screen
+  sPos[i*3+1] = rand(-0.6,0.6); // Y ± full height
+  sPos[i*3+2] = rand(0, 0.5);   // Z depth spread
+  const c = new THREE.Color(PALETTE[Math.floor(rand(0, PALETTE.length))]);
+  sCol[i*3]=c.r; sCol[i*3+1]=c.g; sCol[i*3+2]=c.b;
+  sTwnk[i*2]   = rand(0.28, 1.50);
+  sTwnk[i*2+1] = rand(0, Math.PI * 2);
+}
+
+const sGeom = new THREE.BufferGeometry();
+sGeom.setAttribute('position', new THREE.BufferAttribute(sPos,   3));
+sGeom.setAttribute('color',    new THREE.BufferAttribute(sCol,   3));
+sGeom.setAttribute('twinkle',  new THREE.BufferAttribute(sTwnk, 2));
+
+const sMat = new THREE.ShaderMaterial({
+  uniforms: { time:{value:0}, uTex:{value:glowTex()}, uRatio:{value: Math.min(window.devicePixelRatio,2)} },
+  vertexShader: `
+    attribute vec3 color; attribute vec2 twinkle;
+    uniform float time; uniform float uRatio;
+    varying float vA; varying vec3 vC;
+    void main(){
+      vC = color;
+      float s = sin(time * twinkle.x + twinkle.y);
+      vA = pow(max(0.,s), 1.5) * (0.3 + abs(s) * 0.7);
+    gl_Position  = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = (4.0 + twinkle.x * 40.0) * uRatio;
+  }
+  `,
+  fragmentShader: `
+    uniform sampler2D uTex;
+    varying float vA; varying vec3 vC;
+    void main(){
+      float a = texture2D(uTex, gl_PointCoord).a;
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(vC, a * vA * 0.45);
+    }
+  `,
+  // glowTexture: radial, additive blending particles
+  transparent:  true,
+  depthWrite:   false,
+  depthTest:    false,
+  blending: THREE.AdditiveBlending,
+});
+
+spScene.add(new THREE.Points(sGeom, sMat));
+console.log('[3] sparkles scene populated');
+
+/* ════════════════════════════════════
+   TILT (TEXT) CANVAS
+═══════════════════════════════════ */
+const tiltCanvas = document.getElementById('tilt-canvas');
+const tiRenderer = new THREE.WebGLRenderer({
+  canvas: tiltCanvas, alpha: true, antialias: true,
+});
+console.log('[4] tilt renderer created',
+  'webgl:', !!tiRenderer.getContext());
+tiRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+tiRenderer.setSize(window.innerWidth, window.innerHeight);
+tiRenderer.setClearColor(0x000000, 0);
+
+const tiScene = new THREE.Scene();
+tiScene.background = null;
+
+const tiCam = new THREE.PerspectiveCamera(50,
+  window.innerWidth / window.innerHeight, 0.1, 100);
+tiCam.position.set(0, 0, 6);
+tiCam.lookAt(0, 0, 0);
+
+tiScene.add(new THREE.AmbientLight(0xfff5ff, 0.7));
+const fill = new THREE.DirectionalLight(0xfff0e0, 0.5);
+fill.position.set(5, 3, 10); tiScene.add(fill);
+const rim = new THREE.DirectionalLight(0xdce8ff, 0.3);
+rim.position.set(-4, -3, 6);  tiScene.add(rim);
+
+// 3-D text mesh
+let tlGroup = null;
+new FontLoader().load(
+  'https://unpkg.com/three@0.160.0/examples/fonts/helvetiker_regular.typeface.json',
+  (font) => {
+    console.log('[6] font loaded:', font.type, font.data ? 'data-ok' : 'no-data');
+
+    function centeredGeom(p) {
+      const g = new TextGeometry('melle.dev', { font, ...p });
+      g.computeBoundingBox();
+      const bb = g.boundingBox;
+      g.translate(-(bb.max.x-bb.min.x)*.5, -(bb.max.y-bb.min.y)*.5, 0);
+      return g;
+    }
+
+    const matF = new THREE.MeshPhysicalMaterial({
+      color: 0xf0eaf6, emissive: 0x3a1858, emissiveIntensity: 0.30,
+      roughness: 0.3, metalness: 0.05, clearcoat: 0.4,
+    });
+    const matE = new THREE.MeshPhysicalMaterial({
+      color: 0xee8cc0, emissive: 0x6a1850, emissiveIntensity: 0.40,
+      roughness: 0.55, metalness: 0,
+    });
+
+    tlGroup = new THREE.Group();
+    // extrusion sides (shifted in -Z so face renders over them)
+    const eg = centeredGeom({ size:0.42, height:0.14, curveSegments:12,
+      bevelEnabled:true, bevelThickness:0.018, bevelSize:0.014, bevelSegments:3 });
+    eg.translate(0, 0, -0.071);
+    tlGroup.add(new THREE.Mesh(eg, matE));
+    // front face
+    const fg = centeredGeom({ size:0.42, height:0.14, curveSegments:12,
+      bevelEnabled:true, bevelThickness:0.018, bevelSize:0.014, bevelSegments:3 });
+    tlGroup.add(new THREE.Mesh(fg, matF));
+
+    console.log('[7] text meshes added, geometries:', tlGroup.children.length);
+    tiScene.add(tlGroup);
+  },
+  (p) => console.log('font progress:', p),
+  (err) => console.error('font load error:', err)
+);
+
+/* ════════════════════════════════════
+   MOUSE — tilt text only
+═══════════════════════════════════ */
+const tRot = { x:0,y:0 }, cRot = { x:0,y:0 };
+window.addEventListener('mousemove', (e) => {
+  tRot.y = ((e.clientX/window.innerWidth)*2-1)   * 0.30;
+  tRot.x = -((e.clientY/window.innerHeight)*2-1) * 0.25;
+});
+
+/* ════════════════════════════════════
+   RENDER LOOP
+═══════════════════════════════════ */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  sMat.uniforms.time.value = t;
+
+  cRot.x += (tRot.x - cRot.x) * 0.09;
+  cRot.y += (tRot.y - cRot.y) * 0.09;
+  if (tlGroup) { tlGroup.rotation.x = cRot.x; tlGroup.rotation.y = cRot.y; }
+
+  spRenderer.render(spScene, spCam);
+  tiRenderer.render(tiScene, tiCam);
+}
+console.log('[8] entering animate loop');
+animate();
+
+/* ════════════════════════════════════
+   RESIZE
+═══════════════════════════════════ */
+window.addEventListener('resize', () => {
+  const w=window.innerWidth, h=window.innerHeight;
+  spRenderer.setSize(w, h);
+  spRenderer.setClearColor(0x000000, 0);
+  tiRenderer.setSize(w, h);
+  tiCam.aspect = w/h; tiCam.updateProjectionMatrix();
+  console.log('[9] resize', w, h);
+});
+</script>
+
+
+<div id="extension-pddjl"></div></body></html>
